@@ -187,6 +187,10 @@ static int __init bl_idle_init(void)
 
 	if (!match_id)
 		return -ENODEV;
+
+	if (!mcpm_is_available())
+		return -EUNATCH;
+
 	/*
 	 * For now the differentiation between little and big cores
 	 * is based on the part number. A7 cores are considered little

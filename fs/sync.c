@@ -187,6 +187,7 @@ int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
 {
 	if (!fsync_enabled)
 		return 0;
+	struct inode *inode = file->f_mapping->host;
 
 	struct inode *inode = file->f_mapping->host;
 

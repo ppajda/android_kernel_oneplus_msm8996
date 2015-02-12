@@ -397,6 +397,8 @@ static inline bool memcg_kmem_enabled(void)
 	return static_key_false(&memcg_kmem_enabled_key);
 }
 
+bool memcg_kmem_is_active(struct mem_cgroup *memcg);
+
 /*
  * In general, we'll do everything in our power to not incur in any overhead
  * for non-memcg users for the kmem functions. Not even a function call, if we
@@ -521,6 +523,11 @@ memcg_kmem_get_cache(struct kmem_cache *cachep, gfp_t gfp)
 	for (; NULL; )
 
 static inline bool memcg_kmem_enabled(void)
+{
+	return false;
+}
+
+static inline bool memcg_kmem_is_active(struct mem_cgroup *memcg)
 {
 	return false;
 }

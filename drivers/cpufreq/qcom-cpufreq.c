@@ -74,7 +74,7 @@ static int set_cpu_freq(struct cpufreq_policy *policy, unsigned int new_freq,
 {
 	int ret = 0;
 	struct cpufreq_freqs freqs;
-	unsigned long rate;
+	unsigned long rate = 0L;
 
 	freqs.old = policy->cur;
 	freqs.new = new_freq;

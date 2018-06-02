@@ -163,7 +163,7 @@ static int lmk_vmpressure_notifier(struct notifier_block *nb,
 		other_file = global_page_state(NR_FILE_PAGES) + zcache_pages() -
 			global_page_state(NR_SHMEM) -
 			total_swapcache_pages();
-		other_free = global_page_state(NR_FREE_PAGES);
+		other_free = global_page_state(NR_FREE_PAGES) - global_page_state(NR_FREE_DEFRAG_POOL);
 
 		atomic_set(&shift_adj, 1);
 		trace_almk_vmpressure(pressure, other_free, other_file);
@@ -177,7 +177,7 @@ static int lmk_vmpressure_notifier(struct notifier_block *nb,
 			global_page_state(NR_SHMEM) -
 			total_swapcache_pages();
 
-		other_free = global_page_state(NR_FREE_PAGES);
+		other_free = global_page_state(NR_FREE_PAGES) - global_page_state(NR_FREE_DEFRAG_POOL);
 
 		if ((other_free < lowmem_minfree[array_size - 1]) &&
 			(other_file < vmpressure_file_min)) {
@@ -226,6 +226,22 @@ static int test_task_state(struct task_struct *p, int state)
 	for_each_thread(p, t) {
 		task_lock(t);
 		if (t->state & state) {
+			task_unlock(t);
+			return 1;
+		}
+		task_unlock(t);
+	}
+
+	return 0;
+}
+
+static int test_task_lmk_waiting(struct task_struct *p)
+{
+	struct task_struct *t;
+
+	for_each_thread(p, t) {
+		task_lock(t);
+		if (task_lmk_waiting(t)) {
 			task_unlock(t);
 			return 1;
 		}
@@ -425,7 +441,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 	if (!mutex_trylock(&scan_mutex))
 		return 0;
 
-	other_free = global_page_state(NR_FREE_PAGES);
+	other_free = global_page_state(NR_FREE_PAGES) - global_page_state(NR_FREE_DEFRAG_POOL);
 
 	if (global_page_state(NR_SHMEM) + total_swapcache_pages() <
 		global_page_state(NR_FILE_PAGES) + zcache_pages())
@@ -479,7 +495,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 			continue;
 
 		if (time_before_eq(jiffies, lowmem_deathpending_timeout)) {
-			if (test_task_flag(tsk, TIF_MEMDIE)) {
+			if (test_task_lmk_waiting(tsk)) {
 				rcu_read_unlock();
 				mutex_unlock(&scan_mutex);
 				return 0;
@@ -516,6 +532,16 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 		long cache_size = other_file * (long)(PAGE_SIZE / 1024);
 		long cache_limit = minfree * (long)(PAGE_SIZE / 1024);
 		long free = other_free * (long)(PAGE_SIZE / 1024);
+
+		if (test_task_lmk_waiting(selected) &&
+		    (test_task_state(selected, TASK_UNINTERRUPTIBLE))) {
+			lowmem_print(2, "'%s' (%d) is already killed\n",
+				     selected->comm,
+				     selected->pid);
+			rcu_read_unlock();
+			mutex_unlock(&scan_mutex);
+			return 0;
+		}
 		trace_lowmemory_kill(selected, cache_size, cache_limit, free);
 
 		if (test_task_flag(selected, TIF_MEMDIE) &&
@@ -536,6 +562,8 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 				"   Total reserve is %ldkB\n" \
 				"   Total free pages is %ldkB\n" \
 				"   Total file cache is %ldkB\n" \
+				"   SHMEM is %ldkB\n" \
+				"   SwapCached is %ldkB\n" \
 				"   Total zcache is %ldkB\n" \
 				"   GFP mask is 0x%x\n",
 			     selected->comm, selected->pid,
@@ -552,6 +580,10 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 				(long)(PAGE_SIZE / 1024),
 			     global_page_state(NR_FILE_PAGES) *
 				(long)(PAGE_SIZE / 1024),
+				global_page_state(NR_SHMEM) *
+				(long)(PAGE_SIZE / 1024),
+				total_swapcache_pages() *
+				(long)(PAGE_SIZE / 1024),
 			     (long)zcache_pages() * (long)(PAGE_SIZE / 1024),
 			     sc->gfp_mask);
 
@@ -561,9 +593,13 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 		}
 
 		lowmem_deathpending_timeout = jiffies + HZ;
+		task_lock(selected);
 		set_tsk_thread_flag(selected, TIF_MEMDIE);
 		send_sig(SIGKILL, selected, 0);
+		if (selected->mm)
+			task_set_lmk_waiting(selected);
 		rem += selected_tasksize;
+		task_unlock(selected);
 		rcu_read_unlock();
 		/* give the system time to free up the memory */
 		msleep_interruptible(20);

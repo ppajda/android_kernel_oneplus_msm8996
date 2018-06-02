@@ -939,6 +939,11 @@ config MSM_BG_GLINK
 	  provides read and write interface via char device.This driver is
 	  used by the audio codec driver to interface with BG.
 
+config RF_CABLE_DETECT
+	bool "detect RF cable connection"
+	help
+	  detect RF cable connection for different RF configuration
+
 config WCD_DSP_GLINK
 	tristate "WCD DSP GLINK Driver"
 	depends on MSM_GLINK

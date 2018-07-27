@@ -462,7 +462,7 @@ static struct key *construct_key_and_link(struct keyring_search_context *ctx,
 	int ret;
 
 	kenter("");
-
+	
 	ret = construct_get_dest_keyring(&dest_keyring);
 	if (ret)
 		goto error;

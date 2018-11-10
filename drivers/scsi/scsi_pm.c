@@ -392,3 +392,4 @@ const struct dev_pm_ops scsi_bus_pm_ops = {
 	.runtime_resume =	scsi_runtime_resume,
 	.runtime_idle =		scsi_runtime_idle,
 };
+

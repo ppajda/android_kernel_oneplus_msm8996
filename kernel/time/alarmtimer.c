@@ -130,79 +130,6 @@ exit:
 	mutex_unlock(&power_on_alarm_lock);
 }
 
-static struct mutex power_on_alarm_lock;
-
-/**
- * set_power_on_alarm - set power on alarm value into rtc register
- *
- * Get the soonest power off alarm timer and set the alarm value into rtc
- * register.
- */
-void set_power_on_alarm(void)
-{
-	int rc;
-	struct timespec wall_time, alarm_ts;
-	long alarm_secs = 0l;
-	long rtc_secs, alarm_time, alarm_delta;
-	struct rtc_time rtc_time;
-	struct rtc_wkalrm alarm;
-	struct rtc_device *rtc;
-	struct timerqueue_node *next;
-	unsigned long flags;
-	struct alarm_base *base = &alarm_bases[ALARM_POWEROFF_REALTIME];
-
-	rc = mutex_lock_interruptible(&power_on_alarm_lock);
-	if (rc != 0)
-		return;
-
-	spin_lock_irqsave(&base->lock, flags);
-	next = timerqueue_getnext(&base->timerqueue);
-	spin_unlock_irqrestore(&base->lock, flags);
-
-	rtc = alarmtimer_get_rtcdev();
-	if (!rtc)
-		goto exit;
-
-	if (next) {
-		alarm_ts = ktime_to_timespec(next->expires);
-		alarm_secs = alarm_ts.tv_sec;
-	}
-
-	if (!alarm_secs)
-		goto disable_alarm;
-
-	getnstimeofday(&wall_time);
-
-	/*
-	 * alarm_secs have to be bigger than "wall_time +1".
-	 * It is to make sure that alarm time will be always
-	 * bigger than wall time.
-	*/
-	printk("alarm  set_power_on_alarm time = %ld\n",alarm_secs);
-	if (alarm_secs <= wall_time.tv_sec + 1)
-		goto disable_alarm;
-
-	rtc_read_time(rtc, &rtc_time);
-	rtc_tm_to_time(&rtc_time, &rtc_secs);
-	alarm_delta = wall_time.tv_sec - rtc_secs;
-	alarm_time = alarm_secs - alarm_delta;
-
-	rtc_time_to_tm(alarm_time, &alarm.time);
-	alarm.enabled = 1;
-	rc = rtc_set_alarm(rtc, &alarm);
-	if (rc)
-		goto disable_alarm;
-
-	mutex_unlock(&power_on_alarm_lock);
-	return;
-
-disable_alarm:
-//	rtc_timer_cancel(rtc, &rtc->aie_timer);
-	rtc_alarm_irq_enable(rtc, 0);
-exit:
-	mutex_unlock(&power_on_alarm_lock);
-}
-
 static void alarmtimer_triggered_func(void *p)
 {
 	struct rtc_device *rtc = rtcdev;
@@ -1181,3 +1108,4 @@ out_if:
 	return error;
 }
 device_initcall(alarmtimer_init);
+

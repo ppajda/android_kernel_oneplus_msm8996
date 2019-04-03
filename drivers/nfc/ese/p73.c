@@ -1,20 +1,20 @@
- /*
-  * Copyright (C) 2015 NXP Semiconductors
-  *
-  * Licensed under the Apache License, Version 2.0 (the "License");
-  * you may not use this file except in compliance with the License.
-  * You may obtain a copy of the License at
-  *
-  *      http://www.apache.org/licenses/LICENSE-2.0
-  *
-  * Unless required by applicable law or agreed to in writing, software
-  * distributed under the License is distributed on an "AS IS" BASIS,
-  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  * See the License for the specific language governing permissions and
-  * limitations under the License.
-  */
+/*
+ * Copyright (C) 2012-2014 NXP Semiconductors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-  /**
+ /**
  * \addtogroup spi_driver
  *
  * @{ */
@@ -40,38 +40,38 @@
 #include <linux/sched.h>
 #include <linux/poll.h>
 #include <linux/regulator/consumer.h>
-#include <linux/nfc/p61.h>
-#include <linux/nfc/pn544.h>
+#include "p73.h"
+#include "../pn5xx.h"
+
 extern long  pn544_dev_ioctl(struct file *filp, unsigned int cmd,
         unsigned long arg);
-#define DRAGON_P61 1
 
 /* Device driver's configuration macro */
 /* Macro to configure poll/interrupt based req*/
-//#undef P61_IRQ_ENABLE
-#define P61_IRQ_ENABLE
+//#define P61_IRQ_ENABLE
 
 /* Macro to configure Hard/Soft reset to P61 */
 //#define P61_HARD_RESET
-//#undef P61_HARD_RESET
 
-#ifdef P61_HARD_RESET
-static struct regulator *p61_regulator = NULL;
-#else
-#endif
-
-#define P61_IRQ   33 /* this is the same used in omap3beagle.c */
-#define P61_RST  138
-#define P61_POLL_TIMEOUT 2*1000 /*max 2 seconds*/
 /* Macro to define SPI clock frequency */
 
 //#define P61_SPI_CLOCK_7Mzh
 #undef P61_SPI_CLOCK_7Mzh
+#undef P61_SPI_CLOCK_10Mzh
+#define P61_SPI_CLOCK_8Mzh
 
 #ifdef P61_SPI_CLOCK_7Mzh
 #define P61_SPI_CLOCK     7000000L;
 #else
+#ifdef P61_SPI_CLOCK_8Mzh
+#define P61_SPI_CLOCK     8000000L;
+#else
+#ifdef P61_SPI_CLOCK_10Mzh
+#define P61_SPI_CLOCK     10000000L;
+#else
 #define P61_SPI_CLOCK     4000000L;
+#endif
+#endif
 #endif
 
 /* size of maximum read/write buffer supported by driver */
@@ -83,6 +83,9 @@ enum P61_DEBUG_LEVEL {
     P61_FULL_DEBUG
 };
 
+#define READ_THROUGH_PUT 0x01
+#define WRITE_THROUGH_PUT 0x02
+#define MXAX_THROUGH_PUT_TIME 999000L
 /* Variable to store current debug level request by ioctl */
 static unsigned char debug_level;
 
@@ -117,7 +120,92 @@ struct p61_dev {
 
 /* T==1 protocol specific global data */
 const unsigned char SOF = 0xA5u;
+struct p61_through_put {
+    struct timeval rstart_tv;
+    struct timeval rstop_tv;
+    struct timeval wstart_tv;
+    struct timeval wstop_tv;
+    unsigned long total_through_put_wbytes;
+    unsigned long total_through_put_rbytes;
+    unsigned long  total_through_put_rtime;
+    unsigned long total_through_put_wtime;
+    bool enable_through_put_measure;
+};
+static struct p61_through_put p61_through_put_t;
 
+static void p61_start_throughput_measurement(unsigned int type);
+static void p61_stop_throughput_measurement(unsigned int type, int no_of_bytes);
+
+static void p61_start_throughput_measurement(unsigned int type)
+{
+    if (type == READ_THROUGH_PUT)
+    {
+        memset(&p61_through_put_t.rstart_tv, 0x00, sizeof(struct timeval));
+        do_gettimeofday(&p61_through_put_t.rstart_tv);
+    }
+    else if (type == WRITE_THROUGH_PUT)
+    {
+        memset(&p61_through_put_t.wstart_tv, 0x00, sizeof(struct timeval));
+        do_gettimeofday(&p61_through_put_t.wstart_tv);
+
+    }
+    else
+    {
+        P61_DBG_MSG(KERN_ALERT " p61_start_throughput_measurement: wrong type = %d", type);
+    }
+
+}
+static void p61_stop_throughput_measurement(unsigned int type, int no_of_bytes)
+{
+    if (type == READ_THROUGH_PUT)
+    {
+        memset(&p61_through_put_t.rstop_tv, 0x00, sizeof(struct timeval));
+        do_gettimeofday(&p61_through_put_t.rstop_tv);
+        p61_through_put_t.total_through_put_rbytes += no_of_bytes;
+        p61_through_put_t.total_through_put_rtime += (p61_through_put_t.rstop_tv.tv_usec -
+                                                     p61_through_put_t.rstart_tv.tv_usec) +
+                                                     ((p61_through_put_t.rstop_tv.tv_sec -
+                                                     p61_through_put_t.rstart_tv.tv_sec) * 1000000);
+
+        if(p61_through_put_t.total_through_put_rtime >= MXAX_THROUGH_PUT_TIME)
+        {
+            printk(KERN_ALERT " **************** Read Throughput: **************");
+            printk(KERN_ALERT " No of Read Bytes = %ld", p61_through_put_t.total_through_put_rbytes);
+            printk(KERN_ALERT " Total Read Time (uSec) = %ld", p61_through_put_t.total_through_put_rtime);
+            p61_through_put_t.total_through_put_rbytes = 0;
+            p61_through_put_t.total_through_put_rtime = 0;
+            printk(KERN_ALERT " **************** Read Throughput: **************");
+        }
+    printk(KERN_ALERT " No of Read Bytes = %ld", p61_through_put_t.total_through_put_rbytes);
+    printk(KERN_ALERT " Total Read Time (uSec) = %ld", p61_through_put_t.total_through_put_rtime);
+    }
+    else if (type == WRITE_THROUGH_PUT)
+    {
+        memset(&p61_through_put_t.wstop_tv, 0x00, sizeof(struct timeval));
+        do_gettimeofday(&p61_through_put_t.wstop_tv);
+        p61_through_put_t.total_through_put_wbytes += no_of_bytes;
+        p61_through_put_t.total_through_put_wtime += (p61_through_put_t.wstop_tv.tv_usec -
+                                                     p61_through_put_t.wstart_tv.tv_usec) +
+                                                     ((p61_through_put_t.wstop_tv.tv_sec -
+                                                     p61_through_put_t.wstart_tv.tv_sec) * 1000000);
+
+        if(p61_through_put_t.total_through_put_wtime >= MXAX_THROUGH_PUT_TIME)
+        {
+            printk(KERN_ALERT " **************** Write Throughput: **************");
+            printk(KERN_ALERT " No of Write Bytes = %ld", p61_through_put_t.total_through_put_wbytes);
+            printk(KERN_ALERT " Total Write Time (uSec) = %ld", p61_through_put_t.total_through_put_wtime);
+            p61_through_put_t.total_through_put_wbytes = 0;
+            p61_through_put_t.total_through_put_wtime = 0;
+            printk(KERN_ALERT " **************** WRITE Throughput: **************");
+        }
+        printk(KERN_ALERT " No of Write Bytes = %ld", p61_through_put_t.total_through_put_wbytes);
+    printk(KERN_ALERT " Total Write Time (uSec) = %ld", p61_through_put_t.total_through_put_wtime);
+    }
+    else
+    {
+        printk(KERN_ALERT " p61_stop_throughput_measurement: wrong type = %d", type);
+    }
+}
 /**
  * \ingroup spi_driver
  * \brief Called from SPI LibEse to initilaize the P61 device
@@ -173,31 +261,7 @@ static long p61_dev_ioctl(struct file *filp, unsigned int cmd,
     case P61_SET_PWR:
         if (arg == 2)
         {
-#ifdef P61_HARD_RESET
-            P61_DBG_MSG(KERN_ALERT " Disabling p61_regulator");
-            if (p61_regulator != NULL)
-            {
-                regulator_disable(p61_regulator);
-                msleep(50);
-               ret = regulator_enable(p61_regulator);
-                P61_DBG_MSG(KERN_ALERT " Enabling p61_regulator");
-            }
-            else
-            {
-                P61_ERR_MSG(KERN_ALERT " ERROR : p61_regulator is not enabled");
-            }
-#else
-			P61_DBG_MSG(KERN_ALERT " Soft Reset");
-			//gpio_set_value(p61_dev->rst_gpio, 1);
-			//msleep(20);
-			gpio_set_value(p61_dev->rst_gpio, 0);
-			msleep(50);
-			ret = spi_read (p61_dev -> spi,(void *) buf, sizeof(buf));
-			msleep(50);
-			gpio_set_value(p61_dev->rst_gpio, 1);
-			msleep(20);
-#endif
-
+            /* Do nothing*/
         }
         else if (arg == 1)
         {
@@ -211,11 +275,6 @@ static long p61_dev_ioctl(struct file *filp, unsigned int cmd,
             gpio_set_value(p61_dev->rst_gpio, 1);
             msleep(20);
 
-        }
-        else if (arg == 0)
-        {
-            gpio_set_value(p61_dev->rst_gpio, 0);
-            msleep(20);
         }
         break;
 
@@ -242,12 +301,41 @@ static long p61_dev_ioctl(struct file *filp, unsigned int cmd,
         ret = pn544_dev_ioctl(filp, P61_SET_SPI_PWR, arg);
         P61_DBG_MSG(KERN_ALERT " P61_SET_SPM_PWR: exit");
     break;
+    case P61_GET_SPM_STATUS:
+        P61_DBG_MSG(KERN_ALERT " P61_GET_SPM_STATUS: enter");
+        ret = pn544_dev_ioctl(filp, P61_GET_PWR_STATUS, arg);
+        P61_DBG_MSG(KERN_ALERT " P61_GET_SPM_STATUS: exit");
+    break;
+    case P61_SET_DWNLD_STATUS:
+        P61_DBG_MSG(KERN_ALERT " P61_SET_DWNLD_STATUS: enter");
+        ret = pn544_dev_ioctl(filp, PN544_SET_DWNLD_STATUS, arg);
+        P61_DBG_MSG(KERN_ALERT " P61_SET_DWNLD_STATUS: =%lu exit",arg);
+    break;
+    case P61_SET_THROUGHPUT:
+        p61_through_put_t.enable_through_put_measure = true;
+        P61_DBG_MSG(KERN_INFO"[NXP-P61] -  P61_SET_THROUGHPUT enable %d", p61_through_put_t.enable_through_put_measure);
+        break;
+    case P61_GET_ESE_ACCESS:
+        P61_DBG_MSG(KERN_ALERT " P61_GET_ESE_ACCESS: enter");
+        ret = pn544_dev_ioctl(filp, P544_GET_ESE_ACCESS, arg);
+        P61_DBG_MSG(KERN_ALERT " P61_GET_ESE_ACCESS ret: %d exit",ret);
+    break;
+    case P61_SET_POWER_SCHEME:
+        P61_DBG_MSG(KERN_ALERT " P61_SET_POWER_SCHEME: enter");
+        ret = pn544_dev_ioctl(filp, P544_SET_POWER_SCHEME, arg);
+        P61_DBG_MSG(KERN_ALERT " P61_SET_POWER_SCHEME ret: %d exit",ret);
+    break;
+    case P61_INHIBIT_PWR_CNTRL:
+        P61_DBG_MSG(KERN_ALERT " P61_INHIBIT_PWR_CNTRL: enter");
+        ret = pn544_dev_ioctl(filp, P544_SECURE_TIMER_SESSION, arg);
+        P61_DBG_MSG(KERN_ALERT " P61_INHIBIT_PWR_CNTRL ret: %d exit", ret);
+    break;
     default:
         P61_DBG_MSG(KERN_ALERT " Error case");
         ret = -EINVAL;
     }
 
-    P61_DBG_MSG(KERN_ALERT "p61_dev_ioctl-exit %u arg = %ld\n", cmd, arg);
+    P61_DBG_MSG(KERN_ALERT "p61_dev_ioctl-exit %u arg = %lu\n", cmd, arg);
     return ret;
 }
 
@@ -267,11 +355,12 @@ static long p61_dev_ioctl(struct file *filp, unsigned int cmd,
 static ssize_t p61_dev_write(struct file *filp, const char *buf, size_t count,
         loff_t *offset)
 {
+
     int ret = -1;
     struct p61_dev *p61_dev;
     unsigned char tx_buffer[MAX_BUFFER_SIZE];
 
-    P61_DBG_MSG(KERN_ALERT "p61_dev_write -Enter count %d\n", (int)count);
+    P61_DBG_MSG(KERN_ALERT "p61_dev_write -Enter count %zu\n", count);
 
     p61_dev = filp->private_data;
 
@@ -286,9 +375,10 @@ static ssize_t p61_dev_write(struct file *filp, const char *buf, size_t count,
         mutex_unlock(&p61_dev->write_mutex);
         return -EFAULT;
     }
+    if(p61_through_put_t.enable_through_put_measure)
+        p61_start_throughput_measurement(WRITE_THROUGH_PUT);
     /* Write data */
     ret = spi_write(p61_dev->spi, &tx_buffer[0], count);
-
     if (ret < 0)
     {
         ret = -EIO;
@@ -296,67 +386,14 @@ static ssize_t p61_dev_write(struct file *filp, const char *buf, size_t count,
     else
     {
         ret = count;
+        if(p61_through_put_t.enable_through_put_measure)
+            p61_stop_throughput_measurement(WRITE_THROUGH_PUT, ret);
     }
 
     mutex_unlock(&p61_dev->write_mutex);
     P61_DBG_MSG(KERN_ALERT "p61_dev_write ret %d- Exit \n", ret);
     return ret;
 }
-
-#ifdef P61_IRQ_ENABLE
-
-/**
- * \ingroup spi_driver
- * \brief To disable IRQ
- *
- * \param[in]       struct p61_dev *
- *
- * \retval void
- *
-*/
-
-static void p61_disable_irq(struct p61_dev *p61_dev)
-{
-    unsigned long flags;
-
-    P61_DBG_MSG("Entry : %s\n", __FUNCTION__);
-
-    spin_lock_irqsave(&p61_dev->irq_enabled_lock, flags);
-    if (p61_dev->irq_enabled)
-    {
-        disable_irq_nosync(p61_dev->spi->irq);
-        p61_dev->irq_enabled = false;
-    }
-    spin_unlock_irqrestore(&p61_dev->irq_enabled_lock, flags);
-
-    P61_DBG_MSG("Exit : %s\n", __FUNCTION__);
-}
-
-/**
- * \ingroup spi_driver
- * \brief Will get called when interrupt line asserted from P61
- *
- * \param[in]       int
- * \param[in]       void *
- *
- * \retval IRQ handle
- *
-*/
-
-static irqreturn_t p61_dev_irq_handler(int irq, void *dev_id)
-{
-    struct p61_dev *p61_dev = dev_id;
-
-    P61_DBG_MSG("Entry : %s\n", __FUNCTION__);
-    p61_disable_irq(p61_dev);
-
-    /* Wake up waiting readers */
-    wake_up(&p61_dev->read_wq);
-
-    P61_DBG_MSG("Exit : %s\n", __FUNCTION__);
-    return IRQ_HANDLED;
-}
-#endif
 
 /**
  * \ingroup spi_driver
@@ -375,14 +412,10 @@ static ssize_t p61_dev_read(struct file *filp, char *buf, size_t count,
         loff_t *offset)
 {
     int ret = -EIO;
-	int i =0;
     struct p61_dev *p61_dev = filp->private_data;
-    unsigned char sof = 0x00;
-    int total_count = 0;
-    int sof_counter = 0;/* one read may take 1 ms*/
     unsigned char rx_buffer[MAX_BUFFER_SIZE];
 
-    P61_DBG_MSG("p61_dev_read count %d - Enter \n", (int)count);
+    P61_DBG_MSG("p61_dev_read count %zu - Enter \n", count);
 
     mutex_lock(&p61_dev->read_mutex);
     if (count > MAX_BUFFER_SIZE)
@@ -396,124 +429,42 @@ static ssize_t p61_dev_read(struct file *filp, char *buf, size_t count,
     {
         P61_DBG_MSG(" %s Poll Mode Enabled \n", __FUNCTION__);
 
-        do
+        P61_DBG_MSG(KERN_INFO"SPI_READ returned 0x%zx", count);
+        ret = spi_read(p61_dev->spi, (void *)&rx_buffer[0], count);
+        if (0 > ret)
         {
-            sof = 0x00;
-            sof_counter++;
-            P61_DBG_MSG(KERN_INFO"SPI_READ returned 0x%x", sof);
-            ret = spi_read(p61_dev->spi, (void *)&sof, 1);
-            if (0 > ret)
-            {
-                P61_ERR_MSG(KERN_ALERT "spi_read failed [SOF] \n");
-                goto fail;
-            }
-            P61_DBG_MSG(KERN_INFO"SPI_READ returned 0x%x", sof);
-            /* if SOF not received, give some time to P61 */
-            /* RC put the conditional delay only if SOF not received */
-            if (sof != SOF)
-            usleep_range(1000,1500);//msleep(5);
-        }while((sof != SOF) && (sof_counter < P61_POLL_TIMEOUT));
-        if (sof != SOF)
-        {
-            P61_ERR_MSG(KERN_ALERT "spi_read SOF timeout \n");
-            ret = -ETIME;
+            P61_ERR_MSG(KERN_ALERT "spi_read failed [SOF] \n");
             goto fail;
         }
     }
     else
     {
-#ifdef P61_IRQ_ENABLE
-        P61_DBG_MSG(" %s Interrrupt Mode Enabled \n", __FUNCTION__);
-        if (!gpio_get_value(p61_dev->irq_gpio))
+        P61_DBG_MSG(" %s P61_IRQ_ENABLE not Enabled \n", __FUNCTION__);
+        ret = spi_read(p61_dev->spi, (void *)&rx_buffer[0], count);
+        if (0 > ret)
         {
-            if (filp->f_flags & O_NONBLOCK)
-            {
-                ret = -EAGAIN;
-                goto fail;
-            }
-            while (1)
-            {
-                ret = 0;
-                P61_DBG_MSG(" %s waiting for interrupt \n", __FUNCTION__);
-                p61_dev->irq_enabled = true;
-                enable_irq(p61_dev->spi->irq);
-                /*If IRQ line is already high, which means IRQ was high
-                 just before enabling the interrupt, skip waiting for interrupt,
-                 as interrupt would have been disabled by then in the interrupt handler*/
-                if (!gpio_get_value(p61_dev->irq_gpio)){
-                  ret = wait_event_interruptible(p61_dev->read_wq,!p61_dev->irq_enabled);
-                }
-                p61_disable_irq(p61_dev);
-                if (ret)
-                {
-                    P61_ERR_MSG("wait_event_interruptible() : Failed\n");
-                    goto fail;
-                }
-
-                if (gpio_get_value(p61_dev->irq_gpio))
-                    break;
-
-                P61_ERR_MSG("%s: spurious interrupt detected\n", __func__);
-            }
-        }
-#else
-    P61_ERR_MSG(" %s P61_IRQ_ENABLE not Enabled \n", __FUNCTION__);
-#endif
-
-		i = 0;
-		do {
-		i ++;
-        /* read the SOF */
-        sof = 0x00;
-        ret = spi_read(p61_dev->spi, (void *)&sof, 1);
-        if ((0 > ret) || (sof != SOF))
-        {
-            P61_DBG_MSG(KERN_INFO"SPI_READ returned 0x%x", sof);
-            P61_ERR_MSG(KERN_ALERT "spi_read failed [SOF] 0x%x\n", ret);
+            P61_DBG_MSG(KERN_INFO"SPI_READ returned 0x%x", ret);
             ret = -EIO;
-			//goto fail;
-		}
-		msleep(1);
-		} while (!sof && (i < 5));
-
-		if (sof != SOF)
-			goto fail;
-}
-
-    total_count = 1;
-    rx_buffer[0] = sof;
-    /* Read the HEADR of Two bytes*/
-    ret = spi_read(p61_dev->spi, (void *)&rx_buffer[1], 2);
-    if (ret < 0)
-    {
-        P61_ERR_MSG(KERN_ALERT "spi_read fails after [PCB] \n");
-        ret = -EIO;
-        goto fail;
+            goto fail;
+        }
     }
 
-    total_count += 2;
-    /* Get the data length */
-    count = rx_buffer[2];
-    P61_DBG_MSG(KERN_INFO"Data Lenth = %d", (int)count);
-    /* Read the availabe data along with one byte LRC */
-    ret = spi_read(p61_dev->spi, (void *)&rx_buffer[3], (count+1));
-    if (ret < 0)
-    {
-        P61_ERR_MSG("spi_read failed \n");
-        ret = -EIO;
-        goto fail;
-    }
-    total_count = (total_count + (count+1));
-    P61_DBG_MSG(KERN_INFO"total_count = %d", total_count);
 
-    if (copy_to_user(buf, &rx_buffer[0], total_count))
+    if(p61_through_put_t.enable_through_put_measure)
+        p61_start_throughput_measurement(READ_THROUGH_PUT);
+
+    if(p61_through_put_t.enable_through_put_measure)
+        p61_stop_throughput_measurement (READ_THROUGH_PUT, count);
+    P61_DBG_MSG(KERN_INFO"total_count = %zu", count);
+
+    if (copy_to_user(buf, &rx_buffer[0], count))
     {
         P61_ERR_MSG("%s : failed to copy to user space\n", __func__);
         ret = -EFAULT;
         goto fail;
     }
-    ret = total_count;
     P61_DBG_MSG("p61_dev_read ret %d Exit\n", ret);
+    P61_DBG_MSG("p61_dev_read ret %d Exit\n", rx_buffer[0]);
 
     mutex_unlock(&p61_dev->read_mutex);
 
@@ -541,91 +492,10 @@ static int p61_hw_setup(struct p61_spi_platform_data *platform_data,
        struct p61_dev *p61_dev, struct spi_device *spi)
 {
     int ret = -1;
-	//int i;
 
     P61_DBG_MSG("Entry : %s\n", __FUNCTION__);
-#ifdef P61_IRQ_ENABLE
-    ret = gpio_request(platform_data->irq_gpio, "p61 irq");
-    if (ret < 0)
-    {
-        P61_ERR_MSG("gpio request failed gpio = 0x%x\n", platform_data->irq_gpio);
-        goto fail;
-    }
-
-    ret = gpio_direction_input(platform_data->irq_gpio);
-    if (ret < 0)
-    {
-        P61_ERR_MSG("gpio request failed gpio = 0x%x\n", platform_data->irq_gpio);
-        goto fail_irq;
-    }
-#endif
-
-#ifdef P61_HARD_RESET
-    /* RC : platform specific settings need to be declare */
-#if !DRAGON_P61
-    p61_regulator = regulator_get( &spi->dev, "vaux3");
-#else
-    //p61_regulator = regulator_get( &spi->dev, "8941_l18");
-    p61_regulator = regulator_get( &spi->dev, "nfc_voltage");
-#endif
-    if (IS_ERR(p61_regulator))
-    {
-        ret = PTR_ERR(p61_regulator);
-#if !DRAGON_P61
-        P61_ERR_MSG(" Error to get vaux3 (error code) = %d\n", ret);
-#else
-        P61_ERR_MSG(" Error to get 8941_l18 (error code) = %d\n", ret);
-#endif
-        return  -ENODEV;
-    }
-    else
-    {
-        P61_DBG_MSG("successfully got regulator\n");
-    }
-
-    ret = regulator_set_voltage(p61_regulator, 1800000, 1800000);
-    if (ret != 0)
-    {
-        P61_ERR_MSG("Error setting the regulator voltage %d\n", ret);
-        regulator_put(p61_regulator);
-        return ret;
-    }
-    else
-    {
-       ret = regulator_enable(p61_regulator);
-        P61_DBG_MSG("successfully set regulator voltage\n");
-
-    }
-#endif
-    ret = gpio_request( platform_data->rst_gpio, "p61 reset");
-    if (ret < 0)
-    {
-        P61_ERR_MSG("gpio reset request failed = 0x%x\n", platform_data->rst_gpio);
-        goto fail_gpio;
-    }
-
-    ret = gpio_direction_output(platform_data->rst_gpio,0);
-    if (ret < 0)
-    {
-        P61_ERR_MSG("gpio rst request failed gpio = 0x%x\n", platform_data->rst_gpio);
-        goto fail_gpio;
-    }
-
-
     ret = 0;
     P61_DBG_MSG("Exit : %s\n", __FUNCTION__);
-    return ret;
-
-
-    fail_gpio:
-    gpio_free(platform_data->rst_gpio);
-
-#ifdef P61_IRQ_ENABLE
-    fail_irq:
-    gpio_free(platform_data->irq_gpio);
-    fail:
-    P61_ERR_MSG("p61_hw_setup failed\n");
-#endif
     return ret;
 }
 
@@ -668,27 +538,13 @@ static const struct file_operations p61_dev_fops = {
         .open = p61_dev_open,
         .unlocked_ioctl = p61_dev_ioctl,
 };
-#if DRAGON_P61
 static int p61_parse_dt(struct device *dev,
     struct p61_spi_platform_data *data)
 {
-    struct device_node *np = dev->of_node;
     int errorno = 0;
-
-        data->irq_gpio = of_get_named_gpio(np, "nxp,p61-irq", 0);
-        if ((!gpio_is_valid(data->irq_gpio)))
-                return -EINVAL;
-
-        data->rst_gpio = of_get_named_gpio(np, "nxp,p61-rst", 0);
-        if ((!gpio_is_valid(data->rst_gpio)))
-                return -EINVAL;
-
-    pr_info("%s: %d, %d %d\n", __func__,
-        data->irq_gpio, data->rst_gpio, errorno);
 
     return errorno;
 }
-#endif
 
 /**
  * \ingroup spi_driver
@@ -700,40 +556,23 @@ static int p61_parse_dt(struct device *dev,
  * \retval 0 if ok.
  *
 */
-//static int __devinit p61_probe(struct spi_device *spi)
+
 static int p61_probe(struct spi_device *spi)
 {
     int ret = -1;
     struct p61_spi_platform_data *platform_data = NULL;
     struct p61_spi_platform_data platform_data1;
     struct p61_dev *p61_dev = NULL;
-#ifdef P61_IRQ_ENABLE
-    unsigned int irq_flags;
-#endif
 
     P61_DBG_MSG("%s chip select : %d , bus number = %d \n",
             __FUNCTION__, spi->chip_select, spi->master->bus_num);
-#if !DRAGON_P61
-    platform_data = spi->dev.platform_data;
-    if (platform_data == NULL)
-    {
-        /* RC : rename the platformdata1 name */
-        /* TBD: This is only for Panda as we are passing NULL for platform data */
-        P61_ERR_MSG("%s : p61 probe fail\n", __func__);
-        platform_data1.irq_gpio = P61_IRQ;
-        platform_data1.rst_gpio = P61_RST;
-        platform_data = &platform_data1;
-        P61_ERR_MSG("%s : p61 probe fail1\n", __func__);
-        //return  -ENODEV;
-    }
-#else
+
     ret = p61_parse_dt(&spi->dev, &platform_data1);
     if (ret) {
         pr_err("%s - Failed to parse DT\n", __func__);
         goto err_exit;
     }
     platform_data = &platform_data1;
-#endif
     p61_dev = kzalloc(sizeof(*p61_dev), GFP_KERNEL);
     if (p61_dev == NULL)
     {
@@ -761,7 +600,7 @@ static int p61_probe(struct spi_device *spi)
 
     p61_dev -> spi = spi;
     p61_dev -> p61_device.minor = MISC_DYNAMIC_MINOR;
-    p61_dev -> p61_device.name = "p61";
+    p61_dev -> p61_device.name = "p73";
     p61_dev -> p61_device.fops = &p61_dev_fops;
     p61_dev -> p61_device.parent = &spi->dev;
     p61_dev->irq_gpio = platform_data->irq_gpio;
@@ -775,11 +614,6 @@ static int p61_probe(struct spi_device *spi)
     mutex_init(&p61_dev->read_mutex);
     mutex_init(&p61_dev->write_mutex);
 
-
-#ifdef P61_IRQ_ENABLE
-    spin_lock_init(&p61_dev->irq_enabled_lock);
-#endif
-
     ret = misc_register(&p61_dev->p61_device);
     if (ret < 0)
     {
@@ -787,35 +621,9 @@ static int p61_probe(struct spi_device *spi)
         goto err_exit0;
     }
 
-#ifdef P61_IRQ_ENABLE
-    p61_dev->spi->irq = gpio_to_irq(platform_data->irq_gpio);
-
-    if ( p61_dev->spi->irq < 0)
-    {
-        P61_ERR_MSG("gpio_to_irq request failed gpio = 0x%x\n", platform_data->irq_gpio);
-        goto err_exit1;
-    }
-    /* request irq.  the irq is set whenever the chip has data available
-         * for reading.  it is cleared when all data has been read.
-         */
-    p61_dev->irq_enabled = true;
-    irq_flags = IRQF_TRIGGER_RISING | IRQF_ONESHOT;
-
-    ret = request_irq(p61_dev->spi->irq, p61_dev_irq_handler,
-                          irq_flags, p61_dev -> p61_device.name, p61_dev);
-    if (ret)
-    {
-        P61_ERR_MSG("request_irq failed\n");
-        goto err_exit1;
-    }
-    p61_disable_irq(p61_dev);
-
-#endif
-
     p61_dev-> enable_poll_mode = 0; /* Default IRQ read mode */
     P61_DBG_MSG("Exit : %s\n", __FUNCTION__);
     return ret;
-    err_exit1:
     misc_deregister(&p61_dev->p61_device);
     err_exit0:
     mutex_destroy(&p61_dev->read_mutex);
@@ -836,30 +644,13 @@ static int p61_probe(struct spi_device *spi)
  * \retval 0 if ok.
  *
 */
-//static int __devexit p61_remove(struct spi_device *spi)
+
 static int p61_remove(struct spi_device *spi)
 {
     struct p61_dev *p61_dev = p61_get_data(spi);
     P61_DBG_MSG("Entry : %s\n", __FUNCTION__);
 
-#ifdef P61_HARD_RESET
-    if (p61_regulator != NULL)
-    {
-        regulator_disable(p61_regulator);
-        regulator_put(p61_regulator);
-    }
-    else
-    {
-        P61_ERR_MSG("ERROR %s p61_regulator not enabled \n", __FUNCTION__);
-    }
-#endif
     gpio_free(p61_dev->rst_gpio);
-
-
-#ifdef P61_IRQ_ENABLE
-    free_irq(p61_dev->spi->irq, p61_dev);
-    gpio_free(p61_dev->irq_gpio);
-#endif
 
     mutex_destroy(&p61_dev->read_mutex);
     misc_deregister(&p61_dev->p61_device);
@@ -869,26 +660,21 @@ static int p61_remove(struct spi_device *spi)
     P61_DBG_MSG("Exit : %s\n", __FUNCTION__);
     return 0;
 }
-#if DRAGON_P61
 static struct of_device_id p61_dt_match[] = {
     {
         .compatible = "nxp,p61",
     },
     {}
 };
-#endif
 static struct spi_driver p61_driver = {
         .driver = {
                 .name = "p61",
                 .bus = &spi_bus_type,
                 .owner = THIS_MODULE,
-#if DRAGON_P61
                 .of_match_table = p61_dt_match,
-#endif
         },
         .probe =  p61_probe,
-        //.remove = __devexit_p(p61_remove),
-        .remove = p61_remove,
+        .remove = (p61_remove),
 };
 
 /**
@@ -903,7 +689,7 @@ static struct spi_driver p61_driver = {
 
 static int __init p61_dev_init(void)
 {
-    debug_level = P61_FULL_DEBUG;
+    debug_level = P61_DEBUG_OFF;
 
     P61_DBG_MSG("Entry : %s\n", __FUNCTION__);
 
@@ -937,3 +723,4 @@ MODULE_DESCRIPTION("NXP P61 SPI driver");
 MODULE_LICENSE("GPL");
 
 /** @} */
+

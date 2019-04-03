@@ -18,6 +18,7 @@
 #include <linux/page-flags-layout.h>
 #include <linux/atomic.h>
 #include <asm/page.h>
+#include <asm/pgtable.h>
 
 /* Free memory management - zoned buddy allocator.  */
 #ifndef CONFIG_FORCE_MAX_ZONEORDER

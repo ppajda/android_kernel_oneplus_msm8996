@@ -65,12 +65,12 @@ static int gc_thread_func(void *data)
 		if (force_gc) {
 			gc_set_wakelock(gc_th, true);
 			wait_ms = soff_wait_ms;
-			gc_th->gc_urgent = 1;
+			sbi->gc_mode = GC_URGENT;
 		} else {
 			gc_set_wakelock(gc_th, false);
 			wait_ms = gc_th->min_sleep_time;
-			gc_th->gc_urgent = 0;
-		}
+			sbi->gc_mode = GC_NORMAL;
+}
 
 		/* give it a try one time */
 		if (gc_th->gc_wake)
@@ -224,7 +224,7 @@ void start_all_gc_threads(void)
 		if (invalid_blocks >
 		    ((long)((sbi->user_block_count - written_block_count(sbi)) *
 			RAPID_GC_LIMIT_INVALID_BLOCK) / 100)) {
-			start_gc_thread(sbi);
+			f2fs_start_gc_thread(sbi);
 			sbi->gc_thread->gc_wake = 1;
 			wake_up_interruptible_all(&sbi->gc_thread->gc_wait_queue_head);
 		} else {
@@ -241,7 +241,7 @@ void stop_all_gc_threads(void)
 
 	mutex_lock(&f2fs_sbi_mutex);
 	list_for_each_entry(sbi, &f2fs_sbi_list, list) {
-		stop_gc_thread(sbi);
+		f2fs_stop_gc_thread(sbi);
 	}
 	mutex_unlock(&f2fs_sbi_mutex);
 }

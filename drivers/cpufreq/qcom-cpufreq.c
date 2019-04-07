@@ -629,11 +629,7 @@ static int get_c0_available_cpufreq(void)
 
 static int get_c1_available_cpufreq(void)
 {
-<<<<<<< HEAD
 	unsigned int max_cpufreq_index = 0, min_cpufreq_index = 0;
-=======
-	unsigned int max_cpufreq_index, min_cpufreq_index;
->>>>>>> fa5609870133... Fix last uninitialized warnings
 	unsigned int max_index = 0;
 	unsigned int index_max = 0, index_min = 0;
 	struct cpufreq_frequency_table *table, *pos;

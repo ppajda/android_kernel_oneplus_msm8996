@@ -102,3 +102,4 @@ android/configs/android-*.cfg
 
 build.sh
 out/
+net/wireguard/

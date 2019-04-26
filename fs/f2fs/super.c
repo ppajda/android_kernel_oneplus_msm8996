@@ -1108,7 +1108,6 @@ static void f2fs_put_super(struct super_block *sb)
 	 * above failed with error.
 	 */
 	f2fs_destroy_stats(sbi);
-	f2fs_sbi_list_del(sbi);
 
 	/* destroy f2fs internal modules */
 	f2fs_destroy_node_manager(sbi);
@@ -1452,6 +1451,7 @@ static void default_options(struct f2fs_sb_info *sbi)
 	F2FS_OPTION(sbi).s_resuid = make_kuid(&init_user_ns, F2FS_DEF_RESUID);
 	F2FS_OPTION(sbi).s_resgid = make_kgid(&init_user_ns, F2FS_DEF_RESGID);
 
+	set_opt(sbi, BG_GC);
 	set_opt(sbi, INLINE_XATTR);
 	set_opt(sbi, INLINE_DATA);
 	set_opt(sbi, INLINE_DENTRY);
@@ -2529,6 +2529,14 @@ static int sanity_check_raw_super(struct f2fs_sb_info *sbi,
 		return 1;
 	}
 
+	/* check log blocks per segment */
+	if (le32_to_cpu(raw_super->log_blocks_per_seg) != 9) {
+		f2fs_msg(sb, KERN_INFO,
+			"Invalid log blocks per segment (%u)\n",
+			le32_to_cpu(raw_super->log_blocks_per_seg));
+		return 1;
+	}
+
 	/* Currently, support 512/1024/2048/4096 bytes sector size */
 	if (le32_to_cpu(raw_super->log_sectorsize) >
 				F2FS_MAX_LOG_SECTOR_SIZE ||
@@ -3358,7 +3366,6 @@ try_onemore:
 	err = f2fs_build_stats(sbi);
 	if (err)
 		goto free_nm;
-	f2fs_sbi_list_add(sbi);
 
 	/* get an inode for node space */
 	sbi->node_inode = f2fs_iget(sb, F2FS_NODE_INO(sbi));
@@ -3367,8 +3374,6 @@ try_onemore:
 		err = PTR_ERR(sbi->node_inode);
 		goto free_stats;
 	}
-
-	f2fs_sbi_list_add(sbi);
 
 	/* read root inode and dentry */
 	root = f2fs_iget(sb, F2FS_ROOT_INO(sbi));
@@ -3522,7 +3527,6 @@ free_node_inode:
 	sbi->node_inode = NULL;
 free_stats:
 	f2fs_destroy_stats(sbi);
-	f2fs_sbi_list_del(sbi);
 free_nm:
 	f2fs_destroy_node_manager(sbi);
 free_sm:
@@ -3705,4 +3709,5 @@ module_exit(exit_f2fs_fs)
 MODULE_AUTHOR("Samsung Electronics's Praesto Team");
 MODULE_DESCRIPTION("Flash Friendly File System");
 MODULE_LICENSE("GPL");
+
 

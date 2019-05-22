@@ -260,7 +260,6 @@ static int sdcardfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode
 	task_unlock(current);
 
 	err = vfs_mkdir2(lower_mnt, lower_parent_dentry->d_inode, lower_dentry, mode);
-
 	if (err) {
 		unlock_dir(lower_parent_dentry);
 		goto out;

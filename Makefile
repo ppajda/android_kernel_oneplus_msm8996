@@ -403,8 +403,8 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -Werror-implicit-function-declaration \
 		   -Wno-format-security \
 		   -std=gnu89 \
-		   -mcpu=cortex-a57.cortex-a53+crc+crypto+fp+simd -mtune=cortex-a57.cortex-a53 -fdiagnostics-color=always \
-	           --param l1-cache-line-size=64 --param l1-cache-size=32 --param l2-cache-size=512
+		   -fdiagnostics-color=always \
+		   -mcpu=cortex-a57.cortex-a53+crc+crypto+fp+simd
 
 # Kryo doesn't need 835769/843419 erratum fixes.
 # Some toolchains enable those fixes automatically, so opt-out.

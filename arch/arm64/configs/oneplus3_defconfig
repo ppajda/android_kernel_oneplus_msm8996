@@ -1,4 +1,4 @@
-CONFIG_LOCALVERSION="-unicornblood-oneplus3-q"
+CONFIG_LOCALVERSION="-xtd-oneplus3"
 # CONFIG_LOCALVERSION_AUTO is not set
 # CONFIG_USELIB is not set
 CONFIG_AUDIT=y

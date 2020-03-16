@@ -30,7 +30,10 @@
 #include <linux/mmzone.h>
 #include <linux/swap.h>
 #include <linux/vmstat.h>
-#include <asm/atomic.h>
+#include <linux/vmalloc.h>
+/*#include <asm/atomic.h>*/
+#include <linux/atomic.h>
+
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <linux/slab.h>
@@ -38,16 +41,19 @@
 #include <linux/workqueue.h>
 #include <linux/seq_file.h>
 #include <linux/proc_fs.h>
+#ifdef CONFIG_CMA
+#include <linux/cma.h>
+#endif
 
 #include "oem_trace.h"
 
 
-#define IOCTL_OTRACER_TEST     		(1<<0)
-#define IOCTL_OTRACER_STACK     	(1<<1)
-#define IOCTL_OTRACER_MEMINFO   	(1<<2)
-#define IOCTL_OTRACER_TASKINFO	 	(1<<3)
-#define IOCTL_OTRACER_ALLINFO       (1<<4)
-#define IOCTL_OTRACER_TOLCD       	(1<<5)
+#define IOCTL_OTRACER_TEST			(1<<0)
+#define IOCTL_OTRACER_STACK			(1<<1)
+#define IOCTL_OTRACER_MEMINFO		(1<<2)
+#define IOCTL_OTRACER_TASKINFO		(1<<3)
+#define IOCTL_OTRACER_ALLINFO		(1<<4)
+#define IOCTL_OTRACER_TOLCD			(1<<5)
 
 #define IOCTL_OTRACER_PANIC		(1<<12)
 
@@ -56,38 +62,27 @@ struct vmalloc_info {
 	unsigned long	largest_chunk;
 };
 
-#ifdef CONFIG_MMU
-#define VMALLOC_TOTAL (VMALLOC_END - VMALLOC_START)
-extern void get_vmalloc_info(struct vmalloc_info *vmi);
-#endif
-
-
-#if 0
-extern unsigned reboot_reason;
-extern void *restart_reason;
-#endif
 
 void backtrace_test_saved(void)
 {
 	struct stack_trace trace;
 	unsigned long entries[8];
 
-	printk("\nThe following trace is a kernel self test and not a bug!\n");
+	pr_info("\nThe following trace is a kernel self test and not a bug!\n");
 
 	trace.nr_entries = 0;
 	trace.max_entries = ARRAY_SIZE(entries);
 	trace.entries = entries;
 	trace.skip = 0;
 
-	printk("Testing a dump_stack.\n");
+	pr_info("Testing a dump_stack.\n");
 	dump_stack();
-	//printk("Testing a save_stack_trace.\n");
-	//save_stack_trace(&trace);
-	printk("Testing a print_stack_trace.\n");
+	pr_info("Testing a print_stack_trace.\n");
 	print_stack_trace(&trace, 0);
 }
 
-void tasks_mem_get(struct mm_struct *mm, unsigned long *vsize, unsigned long *vrss)
+void tasks_mem_get(
+struct mm_struct *mm, unsigned long *vsize, unsigned long *vrss)
 {
 	unsigned long hiwater_vm, total_vm, hiwater_rss, total_rss;
 
@@ -102,12 +97,12 @@ void tasks_mem_get(struct mm_struct *mm, unsigned long *vsize, unsigned long *vr
 	*vrss = total_rss << (PAGE_SHIFT-10);
 }
 
-static const char *task_state_array[] = {
-	"R-0",		/*  0 (running) */
-	"S-1",		/*  1 (sleeping) */
-	"D-2",	/*  2 (disk sleep) */
-	"T-4",		/*  4 (stopped) */
-	"T-8",	/*  8 (tracing stop) */
+static char *task_state_array[] = {
+	"R-0",		/*	0 (running) */
+	"S-1",		/*	1 (sleeping) */
+	"D-2",	/*	2 (disk sleep) */
+	"T-4",		/*	4 (stopped) */
+	"T-8",	/*	8 (tracing stop) */
 	"Z-F",		/* 16 (zombie) */
 	"X-"		/* 32 (dead) */
 };
@@ -115,7 +110,7 @@ static const char *task_state_array[] = {
 static inline const char *get_task_state(struct task_struct *tsk)
 {
 	unsigned int state = (tsk->state & TASK_REPORT) | tsk->exit_state;
-	const char **p = &task_state_array[0];
+	char **p = &task_state_array[0];
 
 	while (state) {
 		p++;
@@ -127,25 +122,26 @@ static inline const char *get_task_state(struct task_struct *tsk)
 void tasks_test_saved(void)
 {
 	struct task_struct *p;
-	struct cred *cred =NULL;
+	struct cred *cred = NULL;
 	struct mm_struct *mm;
 	unsigned long vsize = 0, vrss = 0;
 
-	printk("\nThe following trace is a kernel tasks test and not a bug!\n");
+	pr_info("\nThe following trace is a kernel tasks test and not a bug!\n");
 
-	printk("USER\tPID\tVSIZE\tRSS\tSTATE\tNAME\n");
+	pr_info("USER\tPID\tVSIZE\tRSS\tSTATE\tNAME\n");
 	write_lock_irq(&tasklist_lock);
 	for_each_process(p) {
 
-        cred = (struct cred *)get_cred((struct cred *) __task_cred(p));
+		cred = (struct cred *)get_cred((struct cred *) __task_cred(p));
 
 		vsize = 0;
 		vrss = 0;
 		mm = get_task_mm(p);
-		if (mm) {
+
+		if (mm)
 			tasks_mem_get(mm, &vsize, &vrss);
-		}
-		printk("%u\t%d\t%ld\t%ld\t%s\t%s\n",
+
+		pr_info("%u\t%d\t%ld\t%ld\t%s\t%s\n",
 			(cred->uid).val,
 			task_pid_nr(p),
 			vsize,
@@ -161,7 +157,6 @@ void meminfo_test_saved(void)
 struct sysinfo i;
 	unsigned long committed;
 	unsigned long allowed;
-	struct vmalloc_info vmi;
 	long cached;
 	unsigned long pages[NR_LRU_LISTS];
 	int lru;
@@ -181,7 +176,6 @@ struct sysinfo i;
 	if (cached < 0)
 		cached = 0;
 
-	get_vmalloc_info(&vmi);
 
 	for (lru = LRU_BASE; lru < NR_LRU_LISTS; lru++)
 		pages[lru] = global_page_state(NR_LRU_BASE + lru);
@@ -189,57 +183,61 @@ struct sysinfo i;
 	/*
 	 * Tagged format, for easy grepping and expansion.
 	 */
-	printk("Meminfo:\n"
-		"MemTotal:       %8lu kB\n"
-		"MemFree:        %8lu kB\n"
-		"Buffers:        %8lu kB\n"
-		"Cached:         %8lu kB\n"
-		"SwapCached:     %8lu kB\n"
-		"Active:         %8lu kB\n"
-		"Inactive:       %8lu kB\n"
-		"Active(anon):   %8lu kB\n"
+	pr_info("Meminfo:\n"
+		"MemTotal:		 %8lu kB\n"
+		"MemFree:		 %8lu kB\n"
+		"Buffers:		 %8lu kB\n"
+		"Cached:		 %8lu kB\n"
+		"SwapCached:	 %8lu kB\n"
+		"Active:		 %8lu kB\n"
+		"Inactive:		 %8lu kB\n"
+		"Active(anon):	 %8lu kB\n"
 		"Inactive(anon): %8lu kB\n"
-		"Active(file):   %8lu kB\n"
+		"Active(file):	 %8lu kB\n"
 		"Inactive(file): %8lu kB\n"
-		"Unevictable:    %8lu kB\n"
-		"Mlocked:        %8lu kB\n"
+		"Unevictable:	 %8lu kB\n"
+		"Mlocked:		 %8lu kB\n"
 #ifdef CONFIG_HIGHMEM
 		"HighTotal:      %8lu kB\n"
-		"HighFree:       %8lu kB\n"
-		"LowTotal:       %8lu kB\n"
-		"LowFree:        %8lu kB\n"
+		"HighFree:		 %8lu kB\n"
+		"LowTotal:		 %8lu kB\n"
+		"LowFree:		 %8lu kB\n"
 #endif
 #ifndef CONFIG_MMU
-		"MmapCopy:       %8lu kB\n"
+		"MmapCopy:		 %8lu kB\n"
 #endif
 		"SwapTotal:      %8lu kB\n"
 		"SwapFree:       %8lu kB\n"
 		"Dirty:          %8lu kB\n"
 		"Writeback:      %8lu kB\n"
 		"AnonPages:      %8lu kB\n"
-		"Mapped:         %8lu kB\n"
+		"Mapped:		 %8lu kB\n"
 		"Shmem:          %8lu kB\n"
-		"Slab:           %8lu kB\n"
-		"SReclaimable:   %8lu kB\n"
-		"SUnreclaim:     %8lu kB\n"
-		"KernelStack:    %8lu kB\n"
-		"PageTables:     %8lu kB\n"
+		"Slab:			 %8lu kB\n"
+		"SReclaimable:	 %8lu kB\n"
+		"SUnreclaim:	 %8lu kB\n"
+		"KernelStack:	 %8lu kB\n"
+		"PageTables:	 %8lu kB\n"
 #ifdef CONFIG_QUICKLIST
-		"Quicklists:     %8lu kB\n"
+		"Quicklists:	 %8lu kB\n"
 #endif
-		"NFS_Unstable:   %8lu kB\n"
-		"Bounce:         %8lu kB\n"
-		"WritebackTmp:   %8lu kB\n"
-		"CommitLimit:    %8lu kB\n"
-		"Committed_AS:   %8lu kB\n"
-		"VmallocTotal:   %8lu kB\n"
-		"VmallocUsed:    %8lu kB\n"
-		"VmallocChunk:   %8lu kB\n"
+		"NFS_Unstable:	 %8lu kB\n"
+		"Bounce:		 %8lu kB\n"
+		"WritebackTmp:	 %8lu kB\n"
+		"CommitLimit:	 %8lu kB\n"
+		"Committed_AS:	 %8lu kB\n"
+		"VmallocTotal:	 %8lu kB\n"
+		"VmallocUsed:	 %8lu kB\n"
+		"VmallocChunk:	 %8lu kB\n"
 #ifdef CONFIG_MEMORY_FAILURE
 		"HardwareCorrupted: %5lu kB\n"
 #endif
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 		"AnonHugePages:  %8lu kB\n"
+#endif
+#ifdef CONFIG_CMA
+		"CmaTotal:		 %8lu kB\n"
+		"CmaFree:		 %8lu kB\n"
 #endif
 		,
 		K(i.totalram),
@@ -292,23 +290,23 @@ struct sysinfo i;
 		K(allowed),
 		K(committed),
 		(unsigned long)VMALLOC_TOTAL >> 10,
-		vmi.used >> 10,
-		vmi.largest_chunk >> 10
+	   0ul, /* used to be vmalloc 'used'*/
+	   0ul	/* used to be vmalloc 'largest_chunk'*/
 #ifdef CONFIG_MEMORY_FAILURE
-		,atomic_long_read(&num_poisoned_pages) << (PAGE_SHIFT - 10)
+		, atomic_long_read(&num_poisoned_pages) << (PAGE_SHIFT - 10)
 #endif
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
-		,K(global_page_state(NR_ANON_TRANSPARENT_HUGEPAGES) *
+		, K(global_page_state(NR_ANON_TRANSPARENT_HUGEPAGES) *
 		   HPAGE_PMD_NR)
+#endif
+#ifdef CONFIG_CMA
+		, K(totalcma_pages)
+		, K(global_page_state(NR_FREE_CMA_PAGES))
 #endif
 		);
 #undef K
 }
 
-#if 0
-extern int oem_con_write(const unsigned char *buf, int count);
-extern void console_activate(void);
-#else
 int oem_con_write(const unsigned char *buf, int count)
 {
 	return 0;
@@ -316,79 +314,56 @@ int oem_con_write(const unsigned char *buf, int count)
 
 void console_activate(void)
 {
-	return;
 }
-#endif
 
 
 static ssize_t otracer_read(struct file *filp, char __user *buf,
-			    size_t size, loff_t *offp)
+				size_t size, loff_t *offp)
 {
-	printk(KERN_INFO "otracer_read: initialized\n");
+	pr_info("otracer_read: initialized\n");
 	return 0;
 }
 
-#if 0
-static ssize_t otracer_write(struct file *filp, const char __user *buf,
-						size_t count, loff_t *offp)
-{
-	printk(KERN_INFO "otracer_write: initialized\n");
-	if (!count)
-		return -EIO;
-	console_activate();
-	printk( "otracer_write console_activate pass\n");
-	oem_con_write(buf, count);
-	printk( "otracer_write oem_con_write pass\n");
-	return count;
-}
-#else
-extern int fbcon_takeover_global(int show_logo) ;
 
-#ifdef CONFIG_MODEM_ERR_ENTER_RAMDUMP
- bool otrace_on = false;
-#else
- static bool otrace_on = false;
-#endif
+static int otrace_on = -1;
+
 
 bool is_otrace_on(void)
 {
-	return otrace_on;
+	return !!otrace_on;
 }
 static ssize_t otracer_write(struct file *filp, const char __user *buf,
 						size_t count, loff_t *offp)
 {
-    char *kbuf = NULL;
+	char *kbuf = NULL;
 
-	if(!is_otrace_on())
+	if (!is_otrace_on())
 		return count;
 
-    printk(KERN_INFO "otracer_write \n");
-    kbuf = kzalloc( PAGE_SIZE, GFP_KERNEL );
-    if(kbuf == NULL)
-    {
-        goto end;
-    }
-    if (!count)
-   {
-        goto free_buf;
-    }
-    if( copy_from_user( kbuf, buf, ((count > PAGE_SIZE) ? PAGE_SIZE : count )) )
-    {
-        goto free_buf;
-    }
-    oem_con_write(kbuf, ((count > PAGE_SIZE) ? PAGE_SIZE : count ));
-    kfree(kbuf);
-    return count;
+	pr_info("otracer_write\n");
+	kbuf = kzalloc(PAGE_SIZE, GFP_KERNEL);
+
+	if (kbuf == NULL)
+		goto end;
+
+	if (!count)
+		goto free_buf;
+
+	if (copy_from_user(kbuf, buf, ((count > PAGE_SIZE)?PAGE_SIZE:count)))
+		goto free_buf;
+
+	oem_con_write(kbuf, ((count > PAGE_SIZE)?PAGE_SIZE:count));
+	kfree(kbuf);
+
+	return count;
 free_buf:
-    kfree(kbuf);
+	kfree(kbuf);
 end:
-    printk( KERN_ERR "otracer_write fail! \n");
-    return ( -EFAULT);
+	pr_info("otracer_write fail!\n");
+	return -EFAULT;
 }
 
-#endif
-
-static long otracer_ioctl(struct file * filp,
+static long otracer_ioctl(struct file *filp,
 		   unsigned int cmd, unsigned long arg)
 {
 	unsigned int cmdv = cmd;
@@ -396,56 +371,47 @@ static long otracer_ioctl(struct file * filp,
 
 	cmdv = cmd;
 
-    printk(KERN_INFO "otracer_ioctl: initialized. cmd=0x%x\n", cmd);
+	pr_info("otracer_ioctl: initialized. cmd=0x%x\n", cmd);
 
-    /* mwalker give a chance to change reboot result to android for android framework. */
-    if (cmd == IOCTL_TRACE_UPDATE_REBOOTFLAG) {
-        printk (KERN_INFO "android update reboot flag\n");
-#if 0
-        reboot_reason = 0x7766550c;
-        writel(0x7766550c, restart_reason);
-#endif
-        goto end;
-    }
+	/*
+	* mwalker give a chance to change reboot
+	* result to android for android framework.
+	*/
+	if (cmd == IOCTL_TRACE_UPDATE_REBOOTFLAG) {
+		pr_info("android update reboot flag\n");
+		goto end;
+	}
 
-	for(i = 0; i < 16; i++)
-	{
-		if(cmdv == 0)
+	for (i = 0; i < 16; i++) {
+		if (cmdv == 0)
 			break;
-		if(cmdv & IOCTL_OTRACER_TOLCD)
-		{
-			//console_activate();
+
+		if (cmdv & IOCTL_OTRACER_TOLCD)
 			cmdv &= (~IOCTL_OTRACER_TOLCD);
-		}
-		if(cmdv & IOCTL_OTRACER_STACK)
-		{
+
+		if (cmdv & IOCTL_OTRACER_STACK) {
 			backtrace_test_saved();
 			cmdv &= (~IOCTL_OTRACER_STACK);
 		}
-		if(cmdv & IOCTL_OTRACER_MEMINFO)
-		{
+		if (cmdv & IOCTL_OTRACER_MEMINFO) {
 			meminfo_test_saved();
 			cmdv &= (~IOCTL_OTRACER_MEMINFO);
 		}
-		if(cmdv & IOCTL_OTRACER_TASKINFO)
-		{
+		if (cmdv & IOCTL_OTRACER_TASKINFO) {
 			tasks_test_saved();
 			cmdv &= (~IOCTL_OTRACER_TASKINFO);
 		}
-		if(cmdv & IOCTL_OTRACER_ALLINFO)
-		{
+		if (cmdv & IOCTL_OTRACER_ALLINFO) {
 			backtrace_test_saved();
 			meminfo_test_saved();
 			tasks_test_saved();
 			cmdv &= (~IOCTL_OTRACER_ALLINFO);
 		}
-		if(cmdv & IOCTL_OTRACER_PANIC)
-		{
+		if (cmdv & IOCTL_OTRACER_PANIC) {
 			pr_info("ioctl panic reboot\n");
-            panic("android");
-            cmdv &= (~IOCTL_OTRACER_PANIC);
-        }
-
+			panic("android");
+			cmdv &= (~IOCTL_OTRACER_PANIC);
+		}
 	}
 end:
 	return 0;
@@ -460,7 +426,7 @@ static int otracer_close(struct inode *inode, struct file *file)
 	pr_info("%s\n", __func__);
 	return 0;
 }
-static struct file_operations otracer_fops = {
+static const struct file_operations otracer_fops = {
 	.owner = THIS_MODULE,
 	.open = otracer_open,
 	.release = otracer_close,
@@ -476,7 +442,7 @@ static struct miscdevice otracer_misc = {
 };
 static int otrace_proc_show(struct seq_file *m, void *v)
 {
- 	seq_printf(m, "\notrace_on:%d\n", is_otrace_on());
+	seq_printf(m, "\notrace_on:%d\n", is_otrace_on());
 	return 0;
 }
 static int otrace_proc_open(struct inode *inode, struct file *file)
@@ -489,6 +455,7 @@ static ssize_t otrace_proc_write(struct file *file, const char __user *buffer,
 	unsigned char *lbuf;
 	size_t local_count;
 	unsigned long val;
+	ssize_t ret;
 
 	if (count <= 0)
 		return 0;
@@ -498,19 +465,20 @@ static ssize_t otrace_proc_write(struct file *file, const char __user *buffer,
 	if (!lbuf)
 		return 0;
 
-	local_count = (LBUFSIZE - 1)>count?count:(LBUFSIZE - 1);
+	local_count = (LBUFSIZE - 1) > count?count:(LBUFSIZE - 1);
 	if (copy_from_user(lbuf, buffer, local_count) != 0) {
 		kfree(lbuf);
 		return -EFAULT;
 	}
 
-	lbuf[local_count] = '\0';
-	val = simple_strtoul(lbuf, NULL, 10);
+	ret = kstrtoul(lbuf, 10, &val);
+	if (ret)
+		return ret;
 
-	if(val == 7978)
-		otrace_on = true;
+	if (val == 7978)
+		otrace_on = 1;
 	else
-		otrace_on = false;
+		otrace_on = 0;
 
 	pr_info("val:%ld, otrace_on:%d\n", val, otrace_on);
 
@@ -536,18 +504,18 @@ static int __init otracer_init(void)
 
 	ret = misc_register(&otracer_misc);
 	if (unlikely(ret)) {
-		printk(KERN_ERR "otracer: failed to register misc device!\n");
+		pr_err("otracer: failed to register misc device!\n");
 		return ret;
 	}
 
 	/* Set up the proc file system */
-	otrace_entry = proc_create("otrace_on", 0666, NULL, &otrace_proc_fops);
+	otrace_entry = proc_create("otrace_on", 0644, NULL, &otrace_proc_fops);
 	if (!otrace_entry) {
 		ret = -ENOMEM;
 		goto out_misc;
 	}
 
-	printk(KERN_INFO "otracer: initialized\n");
+	pr_info("otracer: initialized\n");
 
 	return 0;
 out_misc:
@@ -557,15 +525,12 @@ out_misc:
 
 static void __exit otracer_exit(void)
 {
-	int ret;
 
 	remove_proc_entry("otrace_on", NULL);
 
-	ret = misc_deregister(&otracer_misc);
-	if (unlikely(ret))
-		printk(KERN_ERR "otracer: failed to unregister misc device!\n");
+	misc_deregister(&otracer_misc);
 
-	printk(KERN_INFO "otracer: exit\n");
+	pr_info("otracer: exit\n");
 }
 
 module_init(otracer_init);
@@ -574,5 +539,6 @@ module_exit(otracer_exit);
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("oem tracer");
 MODULE_AUTHOR("Andy");
+
 
 

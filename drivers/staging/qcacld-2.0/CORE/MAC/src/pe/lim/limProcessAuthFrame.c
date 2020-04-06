@@ -106,6 +106,46 @@ isAuthValid(tpAniSirGlobal pMac, tpSirMacAuthFrameBody auth,
 }
 
 #ifdef WLAN_FEATURE_SAE
+
+/**
+ * lim_external_auth_add_pre_auth_node()- Add preauth node for the peer
+ *                                        performing external authentication
+ * @mac_ctx: MAC context
+ * @mac_hdr: Mac header of the packet
+ * @mlm_state: MLM state to be marked to track SAE authentication
+ *
+ * Return: None
+ */
+static void lim_external_auth_add_pre_auth_node(tpAniSirGlobal mac_ctx,
+						tpSirMacMgmtHdr mac_hdr,
+						tLimMlmStates mlm_state)
+{
+	struct tLimPreAuthNode *auth_node;
+	tpLimPreAuthTable preauth_table = &mac_ctx->lim.gLimPreAuthTimerTable;
+
+	limLog(mac_ctx, LOG1, FL("=======> eSIR_AUTH_TYPE_SAE"));
+	/* Create entry for this STA in pre-auth list */
+	auth_node = limAcquireFreePreAuthNode(mac_ctx, preauth_table);
+	if (!auth_node) {
+		limLog(mac_ctx, LOG1,
+		       "Max pre-auth nodes reached " MAC_ADDRESS_STR,
+		       MAC_ADDR_ARRAY(mac_hdr->sa));
+		return;
+	}
+	limLog(mac_ctx, LOG1,
+	       "Creating preauth node for SAE peer " MAC_ADDRESS_STR,
+	       MAC_ADDR_ARRAY(mac_hdr->sa));
+	vos_mem_copy((uint8_t *)auth_node->peerMacAddr,
+		     mac_hdr->sa, sizeof(tSirMacAddr));
+	auth_node->mlmState = mlm_state;
+	auth_node->authType = eSIR_AUTH_TYPE_SAE;
+	auth_node->timestamp = vos_timer_get_system_ticks();
+	auth_node->seqNum = ((mac_hdr->seqControl.seqNumHi << 4) |
+		 (mac_hdr->seqControl.seqNumLo));
+	auth_node->assoc_req.present = false;
+	limAddPreAuthNode(mac_ctx, auth_node);
+}
+
 /**
  * lim_process_sae_auth_frame()-Process SAE authentication frame
  * @mac_ctx: MAC context

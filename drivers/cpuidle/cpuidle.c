@@ -612,6 +612,8 @@ EXPORT_SYMBOL_GPL(cpuidle_register);
 
 #ifdef CONFIG_SMP
 
+static atomic_t idle_cpu_mask = ATOMIC_INIT(0);
+
 static void smp_callback(void *v)
 {
 	/* we already woke the CPU up, nothing more to do */

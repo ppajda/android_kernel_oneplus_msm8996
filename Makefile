@@ -404,7 +404,11 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -Wno-format-security \
 		   -std=gnu89 $(call cc-option,-fno-PIE) \
 		   -fdiagnostics-color=always \
-		   -mcpu=cortex-a57.cortex-a53+crc+crypto+fp+simd
+		   -mcpu=cortex-a57.cortex-a53+crc+crypto+fp+simd \
+		   --param=inline-min-speedup=15 \
+		   --param=max-inline-insns-single=200 \
+		   --param=max-inline-insns-auto=30 \
+		   --param=early-inlining-insns=14
 
 # Kryo doesn't need 835769/843419 erratum fixes.
 # Some toolchains enable those fixes automatically, so opt-out.

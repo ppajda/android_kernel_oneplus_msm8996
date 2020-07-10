@@ -388,12 +388,7 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -Werror-implicit-function-declaration \
 		   -Wno-format-security \
 		   -std=gnu89 $(call cc-option,-fno-PIE) \
-		   -fdiagnostics-color=always \
-		   -mcpu=cortex-a57.cortex-a53+crc+crypto+fp+simd \
-		   --param=inline-min-speedup=15 \
-		   --param=max-inline-insns-single=200 \
-		   --param=max-inline-insns-auto=30 \
-		   --param=early-inlining-insns=14
+		   -fdiagnostics-color=always
 
 # Kryo doesn't need 835769/843419 erratum fixes.
 # Some toolchains enable those fixes automatically, so opt-out.
@@ -412,7 +407,7 @@ KBUILD_AFLAGS   := -D__ASSEMBLY__ $(call cc-option,-fno-PIE)
 KBUILD_AFLAGS_MODULE  := -DMODULE
 KBUILD_CFLAGS_MODULE  := -DMODULE
 KBUILD_LDFLAGS_MODULE := -T $(srctree)/scripts/module-common.lds
-
+LDFLAGS :=
 
 # Read KERNELRELEASE from include/config/kernel.release (if it exists)
 KERNELRELEASE = $(shell cat include/config/kernel.release 2> /dev/null)
@@ -634,12 +629,14 @@ KBUILD_CFLAGS += $(call cc-disable-warning, gnu)
 KBUILD_CFLAGS += $(call cc-disable-warning, address-of-packed-member)
 KBUILD_CFLAGS += $(call cc-disable-warning, duplicate-decl-specifier)
 KBUILD_CFLAGS += $(call cc-disable-warning, pointer-bool-conversion)
+KBUILD_CFLAGS += $(call cc-disable-warning, ignored-optimization-argument)
 # Quiet clang warning: comparison of unsigned expression < 0 is always false
 KBUILD_CFLAGS += $(call cc-disable-warning, tautological-compare)
 # CLANG uses a _MergedGlobals as optimization, but this breaks modpost, as the
 # source of a reference will be _MergedGlobals and not on of the whitelisted names.
 # See modpost pattern 2
 KBUILD_CFLAGS += $(call cc-option, -mno-global-merge,)
+KBUILD_CFLAGS += $(call cc-option, -strip-debug,)
 KBUILD_CFLAGS += $(call cc-option, -fcatch-undefined-behavior)
 KBUILD_CFLAGS += $(call cc-option, -no-integrated-as)
 KBUILD_AFLAGS += $(call cc-option, -no-integrated-as)
